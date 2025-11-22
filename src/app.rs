@@ -2,7 +2,7 @@ use tokio::sync::mpsc;
 use std::io;
 use ratatui::crossterm::event::KeyCode;
 
-use crate::state::{AppState, AppEvent};
+use crate::state::{self, AppEvent, AppState};
 use crate::network::{NetworkHandle, connect_to_server};
 use crate::tui::Tui;
 
@@ -31,47 +31,32 @@ impl App {
         })
     }
     
-    async fn handle_key_event(&mut self, key: ratatui::crossterm::event::KeyEvent) -> bool {
-        // Returns should_quit
-        match key.code {
-            // KeyCode::Esc => true,
-            KeyCode::Enter => {
-                let msg = self.state.input_buffer.clone();
-                if !msg.is_empty() {
-                    // Check if it's a command (starts with "!")
-                    if msg.starts_with("!") {
-                        self.handle_command(msg).await;
-                    } else {
-                        // Regular message
-                        self.state.add_message(format!("You: {}", msg));
-                        if let Some(ref handle) = self.network_handle {
-                            handle.send(msg).await;
-                        }
+    async fn handle_key_event(&mut self, key: ratatui::crossterm::event::KeyEvent)  {
+            // Check if it's a plain Enter (without Ctrl, Alt, Shift)
+        if key.code == KeyCode::Enter && key.modifiers.is_empty() {
+            // Get the text from textarea
+            let msg = self.state.textarea.lines()[0].clone();
+            
+            if !msg.is_empty() {
+                // Check if it's a command (starts with "!")
+                if msg.starts_with("!") {
+                    self.handle_command(msg).await;
+                } else {
+                    // Regular message
+                    self.state.add_message(format!("You: {}", msg));
+                    if let Some(ref handle) = self.network_handle {
+                        handle.send(msg).await;
                     }
-                    self.state.input_buffer.clear();
                 }
-                false
+                
+                // Clear the textarea by replacing with empty line
+                self.state.textarea = state::get_default_textarea();
             }
-            KeyCode::Char(c) => {
-                self.state.input_buffer.push(c);
-                false
-            }
-            KeyCode::Backspace => {
-                self.state.input_buffer.pop();
-                false
-            }
-            KeyCode::Up => {
-                if self.state.scroll_offset < self.state.messages.len().saturating_sub(1) {
-                    self.state.scroll_offset += 1;
-                }
-                false
-            }
-            KeyCode::Down => {
-                self.state.scroll_offset = self.state.scroll_offset.saturating_sub(1);
-                false
-            }
-            _ => false,
+        } else {
+            // Pass all other keys (including Ctrl+U, Ctrl+K, etc.) to textarea
+            self.state.textarea.input(key);
         }
+        
     }
     
     async fn handle_command(&mut self, cmd: String) {

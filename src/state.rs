@@ -1,13 +1,15 @@
 
 use ratatui::crossterm::event::KeyEvent;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::widgets::{Borders, Block};
+use tui_textarea::TextArea;
 use std::time::SystemTime;
 
 pub struct AppState {
     pub messages: Vec<Message>,
-    pub input_buffer: String,
     pub scroll_offset: usize,
     pub running: bool,
-    pub cursor_visible: bool,
+    pub textarea: TextArea<'static>
 }
 
 pub struct Message {
@@ -15,14 +17,32 @@ pub struct Message {
     pub timestamp: SystemTime, 
 }
 
+pub fn get_default_textarea() -> TextArea<'static> {
+    let mut textarea = TextArea::from(vec![String::new()]);
+    // Apply styling
+    textarea.set_style(Style::default().fg(Color::White));
+    // Create block with yellow styling applied to it
+    textarea.set_cursor_style(Style::default().fg(Color::Red).add_modifier(Modifier::UNDERLINED).add_modifier(Modifier::RAPID_BLINK));
+    textarea.set_block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Color::LightRed)
+            .title(" input (!quit to exit) ")
+    );
+    
+    textarea
+}
+
 impl AppState {
     pub fn new() -> Self {
+
+        let textarea = get_default_textarea();
+      
         Self {
             messages: Vec::new(),
-            input_buffer: String::new(),
             scroll_offset: 0,
             running: true,
-            cursor_visible: true,
+            textarea
         }
     }
     
@@ -38,6 +58,9 @@ impl AppState {
 
         self.scroll_offset = 0;
     }
+
+
+
 }
 
 pub enum AppEvent {

@@ -9,6 +9,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
 };
+use tui_textarea::TextArea;
 use std::io;
 use crate::state::{AppState, AppEvent};
 use tokio::sync::mpsc;
@@ -46,18 +47,27 @@ impl Tui {
                 .messages
                 .iter()
                 .map(|m| {
+                    let color = if m.content.starts_with("You:") {
+                        Color::White
+                    } else if m.content.starts_with("Remote:") {
+                        Color::White
+                    } else {
+                        Color::LightRed
+                    };
                     ListItem::new(format!(
                         "[{}] {}",
                         chrono::DateTime::<chrono::Local>::from(m.timestamp)
                             .format("%H:%M:%S"),
                         m.content
                     ))
+                    .style(Style::default().fg(color))
                 })
                 .collect();
             
             let messages_widget = List::new(messages)
                 .block(Block::default()
                     .borders(Borders::ALL)
+                    .style(Color::LightGreen)
                     .title(format!(" covent v{} [{}] ", VERSION, chrono::Local::now().format("%H:%M:%S"))));
             
             let available_height = chunks[0].height.saturating_sub(2) as usize;
@@ -82,23 +92,13 @@ impl Tui {
                 .position(total_messages.saturating_sub(state.scroll_offset).saturating_sub(1));
             
             frame.render_stateful_widget(scrollbar, chunks[0], &mut scrollbar_state);
-            
-            let input_widget = Paragraph::new({
-                let mut display_text = state.input_buffer.clone();
-                if state.cursor_visible {
-                    display_text.push('_'); // Add blinking cursor
-                }
-                display_text
-            })
-                .block(Block::default()
-                    .borders(Borders::ALL)
-                    .title(" input (!quit to exit) "))
-                .style(Style::default().fg(Color::Yellow));
-            
-            frame.render_widget(input_widget, chunks[1]);
+
+            frame.render_widget(&state.textarea, chunks[1]);
+
         })?;
         Ok(())
     }
+
 }
 
 impl Drop for Tui {
