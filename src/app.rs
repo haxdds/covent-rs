@@ -34,7 +34,7 @@ impl App {
     async fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> bool {
         // Returns should_quit
         match key.code {
-            KeyCode::Esc => true,
+            // KeyCode::Esc => true,
             KeyCode::Enter => {
                 let msg = self.state.input_buffer.clone();
                 if !msg.is_empty() {
@@ -83,7 +83,7 @@ impl App {
                 let mut ip = None;
                 let mut i = 1;
                 while i < parts.len() {
-                    if parts[i] == "--ip" && i + 1 < parts.len() {
+                    if parts[i] == "-ip" && i + 1 < parts.len() {
                         ip = Some(parts[i + 1].to_string());
                         break;
                     }
@@ -103,9 +103,10 @@ impl App {
                         self.state.add_message("Failed to connect.".to_string());
                     }
                 } else {
-                    self.state.add_message("Usage: !connect --ip <ip_address>".to_string());
+                    self.state.add_message("Usage: !connect -ip <ip_address>".to_string());
                 }
             }
+            "!quit" => {self.state.running = false;}
             _ => {
                 self.state.add_message(format!("Unknown command: {}", parts[0]));
             }
@@ -125,9 +126,9 @@ impl App {
     }
     
     pub async fn run(&mut self) -> io::Result<()> {
-        let mut should_quit = false;
+        // let mut should_quit = false;
         
-        while !should_quit {
+        while self.state.running {
             tokio::select! {
                 Some(handle) = self.network_handle_rx.recv() => {
                     self.network_handle = Some(handle);
@@ -138,7 +139,7 @@ impl App {
                 Some(event) = self.event_rx.recv() => {
                     match event {
                         AppEvent::KeyPress(key) => {
-                            should_quit = self.handle_key_event(key).await;
+                            self.handle_key_event(key).await;
                             self.tui.draw(&self.state)?;
                         }
                         AppEvent::TcpMessage(msg) => {
@@ -148,6 +149,7 @@ impl App {
                             self.handle_tcp_connected(addr)?;
                         }
                         AppEvent::UiTick => {
+                            self.state.tick_cursor();
                             self.tui.draw(&self.state)?;
                         }
                         _ => {}

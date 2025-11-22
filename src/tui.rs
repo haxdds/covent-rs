@@ -83,10 +83,16 @@ impl Tui {
             
             frame.render_stateful_widget(scrollbar, chunks[0], &mut scrollbar_state);
             
-            let input_widget = Paragraph::new(state.input_buffer.as_str())
+            let input_widget = Paragraph::new({
+                let mut display_text = state.input_buffer.clone();
+                if state.cursor_visible {
+                    display_text.push('_'); // Add blinking cursor
+                }
+                display_text
+            })
                 .block(Block::default()
                     .borders(Borders::ALL)
-                    .title(" input (type and press enter, esc to quit) "))
+                    .title(" input (!quit to exit) "))
                 .style(Style::default().fg(Color::Yellow));
             
             frame.render_widget(input_widget, chunks[1]);
