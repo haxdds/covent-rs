@@ -2,7 +2,9 @@ use tokio::{
     net::{TcpListener, TcpStream},
     io::{AsyncWriteExt, AsyncBufReadExt},
     sync::mpsc,
+    time::timeout
 };
+use std::time::Duration;
 use crate::AppEvent;
 
 
@@ -84,10 +86,11 @@ pub async fn connect_to_server(
     ip: String,
     event_tx: mpsc::Sender<AppEvent>,
 ) -> Option<NetworkHandle> {
-    let addr = format!("{}:6969", ip); // Using same port as listener
-    
-    match TcpStream::connect(&addr).await {
-        Ok(stream) => {
+    let addr = format!("{}:6969", ip);
+    let connect_future = TcpStream::connect(addr);
+
+    match timeout(Duration::from_secs(5), connect_future).await {
+        Ok(Ok(stream)) => {
             event_tx.send(AppEvent::TcpConnected(
                 stream.peer_addr().unwrap_or_else(|_| "0.0.0.0:0".parse().unwrap())
             )).await.ok();
@@ -129,5 +132,13 @@ pub async fn connect_to_server(
             )).await.ok();
             None
         }
+        Ok(Err(e)) => {
+            // Connection failed with an error before the timeout
+            event_tx.send(AppEvent::TcpMessage(
+                format!("Connection failed: {}", e)
+            )).await.ok();
+            None
+        },
+
     }
 }

@@ -58,7 +58,7 @@ impl Tui {
             let messages_widget = List::new(messages)
                 .block(Block::default()
                     .borders(Borders::ALL)
-                    .title(format!(" covent v{} [{} (local)] ", VERSION, chrono::Local::now().format("%H:%M:%S"))));
+                    .title(format!(" covent v{} [{}] ", VERSION, chrono::Local::now().format("%H:%M:%S"))));
             
             let available_height = chunks[0].height.saturating_sub(2) as usize;
             let total_messages = state.messages.len();

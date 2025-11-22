@@ -1,5 +1,5 @@
 use tokio::sync::mpsc;
-use crossterm::event::{self, Event};
+use ratatui::crossterm::event::{self, Event};
 use crate::state::AppEvent;
 
 pub struct InputHandler;

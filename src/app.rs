@@ -1,6 +1,6 @@
 use tokio::sync::mpsc;
 use std::io;
-use crossterm::event::KeyCode;
+use ratatui::crossterm::event::KeyCode;
 
 use crate::state::{AppState, AppEvent};
 use crate::network::{NetworkHandle, connect_to_server};
@@ -31,7 +31,7 @@ impl App {
         })
     }
     
-    async fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> bool {
+    async fn handle_key_event(&mut self, key: ratatui::crossterm::event::KeyEvent) -> bool {
         // Returns should_quit
         match key.code {
             // KeyCode::Esc => true,
@@ -149,7 +149,6 @@ impl App {
                             self.handle_tcp_connected(addr)?;
                         }
                         AppEvent::UiTick => {
-                            self.state.tick_cursor();
                             self.tui.draw(&self.state)?;
                         }
                         _ => {}
