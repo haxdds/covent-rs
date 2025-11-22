@@ -75,3 +75,51 @@ pub async fn spawn_tcp_listener(
     
     handle_rx
 }
+
+// ============================================================================
+// TCP CLIENT CONNECTION
+// ============================================================================
+
+pub async fn connect_to_remote(
+    ip: std::net::IpAddr,
+    port: u16,
+    event_tx: mpsc::Sender<AppEvent>,
+) -> Result<NetworkHandle, Box<dyn std::error::Error>> {
+    let addr = std::net::SocketAddr::new(ip, port);
+    let stream = tokio::net::TcpStream::connect(addr).await?;
+    
+    event_tx.send(AppEvent::TcpConnected(addr)).await.ok();
+    
+    let (read_half, write_half) = stream.into_split();
+    let (client_tx, mut client_rx) = mpsc::channel::<String>(100);
+    
+    let handle = NetworkHandle { tx: client_tx.clone() };
+    
+    // Writer task
+    let mut write_half = write_half;
+    tokio::spawn(async move {
+        while let Some(msg) = client_rx.recv().await {
+            if write_half.write_all(msg.as_bytes()).await.is_err() {
+                break;
+            }
+            write_half.write_all(b"\n").await.ok();
+        }
+    });
+    
+    // Reader task
+    let event_tx_clone = event_tx.clone();
+    tokio::spawn(async move {
+        let mut reader = tokio::io::BufReader::new(read_half);
+        let mut line = String::new();
+        
+        while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
+            event_tx_clone
+                .send(AppEvent::TcpMessage(line.trim().to_string()))
+                .await
+                .ok();
+            line.clear();
+        }
+    });
+    
+    Ok(handle)
+}
