@@ -52,4 +52,6 @@ pub enum AppEvent {
     TcpConnected(std::net::SocketAddr),
     // Timer tick for redrawing UI
     UiTick,
+    
+    ConnectCommand(String), // IP address to connect to
 }

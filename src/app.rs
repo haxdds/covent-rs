@@ -3,13 +3,14 @@ use std::io;
 use crossterm::event::KeyCode;
 
 use crate::state::{AppState, AppEvent};
-use crate::network::NetworkHandle;
+use crate::network::{NetworkHandle, connect_to_server};
 use crate::tui::Tui;
 
 pub struct App {
     state: AppState,
     tui: Tui,
     event_rx: mpsc::Receiver<AppEvent>,
+    event_tx: mpsc::Sender<AppEvent>, // Add this
     network_handle_rx: mpsc::Receiver<NetworkHandle>,
     network_handle: Option<NetworkHandle>,
 }
@@ -17,12 +18,14 @@ pub struct App {
 impl App {
     pub fn new(
         event_rx: mpsc::Receiver<AppEvent>,
+        event_tx: mpsc::Sender<AppEvent>, // Add this parameter
         network_handle_rx: mpsc::Receiver<NetworkHandle>,
     ) -> io::Result<Self> {
         Ok(Self {
             state: AppState::new(),
             tui: Tui::new()?,
             event_rx,
+            event_tx, // Add this
             network_handle_rx,
             network_handle: None,
         })
@@ -35,9 +38,15 @@ impl App {
             KeyCode::Enter => {
                 let msg = self.state.input_buffer.clone();
                 if !msg.is_empty() {
-                    self.state.add_message(format!("You: {}", msg));
-                    if let Some(ref handle) = self.network_handle {
-                        handle.send(msg).await;
+                    // Check if it's a command (starts with "!")
+                    if msg.starts_with("!") {
+                        self.handle_command(msg).await;
+                    } else {
+                        // Regular message
+                        self.state.add_message(format!("You: {}", msg));
+                        if let Some(ref handle) = self.network_handle {
+                            handle.send(msg).await;
+                        }
                     }
                     self.state.input_buffer.clear();
                 }
@@ -62,6 +71,44 @@ impl App {
                 false
             }
             _ => false,
+        }
+    }
+    
+    async fn handle_command(&mut self, cmd: String) {
+        let parts: Vec<&str> = cmd.split_whitespace().collect();
+        
+        match parts[0] {
+            "!connect" => {
+                // Parse --ip flag
+                let mut ip = None;
+                let mut i = 1;
+                while i < parts.len() {
+                    if parts[i] == "--ip" && i + 1 < parts.len() {
+                        ip = Some(parts[i + 1].to_string());
+                        break;
+                    }
+                    i += 1;
+                }
+                
+                if let Some(ip_addr) = ip {
+                    self.state.add_message(format!("Connecting to {}...", ip_addr));
+                    self.tui.draw(&self.state).ok();
+                    
+                    // Get event_tx from somewhere - we'll need to store it
+                    // For now, let's add it to App struct
+                    if let Some(handle) = connect_to_server(ip_addr, self.event_tx.clone()).await {
+                        self.network_handle = Some(handle);
+                        self.state.add_message("Connected successfully!".to_string());
+                    } else {
+                        self.state.add_message("Failed to connect.".to_string());
+                    }
+                } else {
+                    self.state.add_message("Usage: !connect --ip <ip_address>".to_string());
+                }
+            }
+            _ => {
+                self.state.add_message(format!("Unknown command: {}", parts[0]));
+            }
         }
     }
     
@@ -103,6 +150,7 @@ impl App {
                         AppEvent::UiTick => {
                             self.tui.draw(&self.state)?;
                         }
+                        _ => {}
                     }
                 }
             }
