@@ -1,9 +1,9 @@
-use tokio::sync::mpsc;
-use std::io;
 use ratatui::crossterm::event::KeyCode;
+use std::io;
+use tokio::sync::mpsc;
 
-use crate::state::{self, AppEvent, AppState};
 use crate::network::{NetworkHandle, connect_to_server};
+use crate::state::{self, AppEvent, AppState};
 use crate::tui::Tui;
 
 pub struct App {
@@ -30,159 +30,151 @@ impl App {
             network_handle: None,
         })
     }
-    
-    async fn handle_key_event(&mut self, key: ratatui::crossterm::event::KeyEvent)  {
-            // Check if it's a plain Enter (without Ctrl, Alt, Shift)
+
+    async fn handle_key_event(&mut self, key: ratatui::crossterm::event::KeyEvent) {
         if key.code == KeyCode::Enter && key.modifiers.is_empty() {
-            // Get the text from textarea
             let msg = self.state.textarea.lines()[0].clone();
-            
+
             if !msg.is_empty() {
-                // Check if it's a command (starts with "!")
                 if msg.starts_with("!") {
                     self.handle_command(msg).await;
                 } else {
-                    // Regular message
                     self.state.add_message(format!("You: {}", msg));
                     if let Some(ref handle) = self.network_handle {
-                        handle.send(msg).await;
+                        handle.send(msg).await.ok();
                     }
                 }
-                
-                // Clear the textarea by replacing with empty line
+
                 self.state.textarea = state::get_default_textarea();
             }
         } else {
-            // Pass all other keys (including Ctrl+U, Ctrl+K, etc.) to textarea
             self.state.textarea.input(key);
         }
-        
     }
-    
-    async fn handle_command(&mut self, cmd: String) {
-        let parts: Vec<&str> = cmd.split_whitespace().collect();
-        
-        match parts[0] {
-            "!connect" => {
-                // Parse --ip flag
-                let mut ip = None;
-                let mut i = 1;
-                while i < parts.len() {
-                    if parts[i] == "-ip" && i + 1 < parts.len() {
-                        ip = Some(parts[i + 1].to_string());
-                        break;
-                    }
-                    i += 1;
-                }
-                
-                if let Some(ip_addr) = ip {
-                    self.state.add_message(format!("Connecting to {}...", ip_addr));
-                    self.tui.draw(&self.state).ok();
-                    
-                    // Get event_tx from somewhere - we'll need to store it
-                    // For now, let's add it to App struct
-                    if let Some(handle) = connect_to_server(ip_addr, self.event_tx.clone()).await {
-                        self.network_handle = Some(handle);
-                        self.state.add_message("Connected successfully!".to_string());
-                    } else {
-                        self.state.add_message("Failed to connect.".to_string());
-                    }
-                } else {
-                    self.state.add_message("Usage: !connect -ip <ip_address>".to_string());
-                }
-            }
-            "!quit" => {self.state.running = false;}
-            "!bash" => {
-            // For the !bash command, attempt to run a bash shell command sent as the rest of the input.
-            // Example: !bash echo hi
-            // This should run "echo hi" in bash and display the output or error in the UI.
 
-            if parts.len() > 1 {
-                let bash_cmd = parts[1..].join(" ");
-                // Spawn the bash process with the given command
-                match tokio::process::Command::new("bash")
-                    .arg("-c")
-                    .arg(&bash_cmd)
-                    .output()
-                    .await 
-                {
-                    Ok(output) => {
-                        if !output.stdout.is_empty() {
-                            let stdout_str = String::from_utf8_lossy(&output.stdout);
-                            self.state.add_message(format!("bash output: {}", stdout_str.trim()));
-                        }
-                        if !output.stderr.is_empty() {
-                            let stderr_str = String::from_utf8_lossy(&output.stderr);
-                            self.state.add_message(format!("bash error: {}", stderr_str.trim()));
-                        }
-                        if output.stdout.is_empty() && output.stderr.is_empty() {
-                            self.state.add_message("bash command produced no output.".to_string());
-                        }
-                    }
-                    Err(e) => {
-                        self.state.add_message(format!("Failed to run bash command: {}", e));
+    async fn execute_bash_command(&mut self, cmd: &str, send_to_remote: bool) {
+        match tokio::process::Command::new("bash")
+            .arg("-c")
+            .arg(cmd)
+            .output()
+            .await
+        {
+            Ok(output) => {
+                let has_stdout = !output.stdout.is_empty();
+                let has_stderr = !output.stderr.is_empty();
+
+                if has_stdout {
+                    let stdout_str = String::from_utf8_lossy(&output.stdout);
+                    self.state
+                        .add_message(format!("bash output: {}", stdout_str.trim()));
+
+                    if send_to_remote {
+                        self.event_tx
+                            .send(AppEvent::BashCmd(stdout_str.trim().to_string()))
+                            .await
+                            .ok();
                     }
                 }
-            } else {
-                self.state.add_message("Usage: !bash <command>".to_string());
+
+                if has_stderr {
+                    let stderr_str = String::from_utf8_lossy(&output.stderr);
+                    self.state
+                        .add_message(format!("bash error: {}", stderr_str.trim()));
+
+                    if send_to_remote {
+                        self.event_tx
+                            .send(AppEvent::BashCmd(stderr_str.trim().to_string()))
+                            .await
+                            .ok();
+                    }
+                }
+
+                if !has_stdout && !has_stderr {
+                    self.state
+                        .add_message("bash command produced no output.".to_string());
+                }
             }
-            }
-            _ => {
-                self.state.add_message(format!("Unknown command: {}", parts[0]));
+            Err(e) => {
+                self.state
+                    .add_message(format!("Failed to run bash command: {}", e));
             }
         }
     }
-    
+
+    fn parse_flag<'a>(&self, parts: &'a [&str], flag: &str) -> Option<&'a str> {
+        parts.windows(2).find(|w| w[0] == flag).map(|w| w[1])
+    }
+
+    async fn handle_connect_command(&mut self, parts: &[&str]) {
+        if let Some(ip_addr) = self.parse_flag(parts, "-ip") {
+            self.state
+                .add_message(format!("Connecting to {}...", ip_addr));
+            self.tui.draw(&self.state).ok();
+
+            if let Some(handle) =
+                connect_to_server(ip_addr.to_string(), self.event_tx.clone()).await
+            {
+                self.network_handle = Some(handle);
+                self.state
+                    .add_message("Connected successfully!".to_string());
+            } else {
+                self.state.add_message("Failed to connect.".to_string());
+            }
+        } else {
+            self.state
+                .add_message("Usage: !connect -ip <ip_address>".to_string());
+        }
+    }
+
+    async fn handle_bash_command(&mut self, parts: &[&str]) {
+        if parts.len() > 1 {
+            let bash_cmd = parts[1..].join(" ");
+            self.execute_bash_command(&bash_cmd, false).await;
+        } else {
+            self.state.add_message("Usage: !bash <command>".to_string());
+        }
+    }
+
+    async fn handle_command(&mut self, cmd: String) {
+        let parts: Vec<&str> = cmd.split_whitespace().collect();
+
+        if parts.is_empty() {
+            return;
+        }
+
+        match parts[0] {
+            "!connect" => self.handle_connect_command(&parts).await,
+            "!quit" => self.state.running = false,
+            "!bash" => self.handle_bash_command(&parts).await,
+            _ => self
+                .state
+                .add_message(format!("Unknown command: {}", parts[0])),
+        }
+    }
+
     async fn handle_tcp_message(&mut self, msg: String) -> io::Result<()> {
         if msg.starts_with(">bash") {
-            self.state.add_message(format!("Remote Command!: {}", msg));
+            self.state.add_message(format!("Remote Command: {}", msg));
             let parts: Vec<&str> = msg.split_whitespace().collect();
             if parts.len() > 1 {
                 let bash_cmd = parts[1..].join(" ");
-                // Spawn the bash process with the given command
-                match tokio::process::Command::new("bash")
-                    .arg("-c")
-                    .arg(&bash_cmd)
-                    .output()
-                    .await 
-                {
-                    Ok(output) => {
-                        if !output.stdout.is_empty() {
-                            let stdout_str = String::from_utf8_lossy(&output.stdout);
-                                self.state.add_message(format!("bash output: {}", stdout_str.trim()));
-
-                                self.event_tx.send(AppEvent::BashCmd(stdout_str.trim().to_string())).await.ok();
-                        }
-                        if !output.stderr.is_empty() {
-                            let stderr_str = String::from_utf8_lossy(&output.stderr);
-                            self.state.add_message(format!("bash error: {}", stderr_str.trim()));
-
-                            self.event_tx.send(AppEvent::BashCmd(stderr_str.trim().to_string())).await.ok();
-                        }
-                        if output.stdout.is_empty() && output.stderr.is_empty() {
-                            self.state.add_message("bash command produced no output.".to_string());
-                        }
-                    }
-                    Err(e) => {
-                        self.state.add_message(format!("Failed to run bash command: {}", e));
-                    }
-                }
-            } 
+                self.execute_bash_command(&bash_cmd, true).await;
+            }
+        } else {
+            self.state.add_message(format!("Remote: {}", msg));
         }
-        self.state.add_message(format!("Remote: {}", msg));
         self.state.scroll_offset = 0;
         self.tui.draw(&self.state)
     }
-    
+
     fn handle_tcp_connected(&mut self, addr: std::net::SocketAddr) -> io::Result<()> {
-        self.state.add_message(format!("Client connected: {}", addr));
+        self.state
+            .add_message(format!("Client connected: {}", addr));
         self.state.scroll_offset = 0;
         self.tui.draw(&self.state)
     }
-    
+
     pub async fn run(&mut self) -> io::Result<()> {
-        // let mut should_quit = false;
-        
         while self.state.running {
             tokio::select! {
                 Some(handle) = self.network_handle_rx.recv() => {
@@ -190,7 +182,7 @@ impl App {
                     self.state.add_message("Client connected!".to_string());
                     self.tui.draw(&self.state)?;
                 }
-                
+
                 Some(event) = self.event_rx.recv() => {
                     match event {
                         AppEvent::KeyPress(key) => {
@@ -209,14 +201,14 @@ impl App {
                         AppEvent::BashCmd(msg) => {
                             self.state.add_message(format!("bash output: {}", msg.trim()));
                             if let Some(ref handle) = self.network_handle {
-                                    handle.send(msg).await
-                                }
+                                handle.send(msg).await.ok();
                             }
+                        }
                     }
                 }
             }
         }
-        
+
         Ok(())
     }
 }
